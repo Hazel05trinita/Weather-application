@@ -1,0 +1,185 @@
+import tkinter as tk
+import tkinter.messagebox as messagebox
+import urllib.request
+import json
+import sqlite3
+
+class WeatherApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Weather Application")
+        self.root.geometry('600x600')
+        self.root.configure(background='light blue')
+
+        # Initialize database
+        self.init_database()
+
+        # Create input widgets
+        self.create_input_widgets()
+
+        # Create weather display frame
+        self.create_weather_display()
+
+        # Create temperature scale frame
+        self.create_temperature_scale()
+
+        # Create "History" button
+        self.create_history_button()
+
+    def init_database(self):
+        # Create a SQLite database connection
+        self.conn = sqlite3.connect('weather_data/weather_history.db')
+
+        # Create a cursor object to execute SQL commands
+        self.cursor = self.conn.cursor()
+
+        # Create a table to store search history if it doesn't exist
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS searches
+                               (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                               city TEXT,
+                               temperature REAL)''')
+
+        # Commit changes
+        self.conn.commit()
+
+    def create_input_widgets(self):
+        input_frame = tk.Frame(self.root, bg='light blue')
+        input_frame.pack(pady=20)
+
+        label_city = tk.Label(input_frame, text="Enter City:", bg='light blue')
+        label_city.grid(row=0, column=0, padx=10, pady=5)
+
+        self.city_entry = tk.Entry(input_frame)
+        self.city_entry.grid(row=0, column=1, padx=10, pady=5)
+
+        button = tk.Button(self.root, text="Get Weather", command=self.get_weather)
+        button.pack(pady=10)
+
+    def create_weather_display(self):
+        self.weather_frame = tk.Frame(self.root, bg='light blue')
+        self.weather_frame.pack(pady=20)
+
+        self.weather_label = tk.Label(self.weather_frame, text="", bg='light blue')
+        self.weather_label.pack()
+
+    def create_temperature_scale(self):
+        scale_frame = tk.Frame(self.root, bg='light blue')
+        scale_frame.pack(side=tk.RIGHT, padx=20)
+
+        self.temperature_canvas = tk.Canvas(scale_frame, width=50, height=300, bg='white')
+        self.temperature_canvas.pack()
+
+        # Initialize temperature scale
+        self.update_temperature_scale(0)
+
+    def create_history_button(self):
+        history_button = tk.Button(self.root, text="History", command=self.show_history)
+        history_button.place(x=10, y=10)
+
+    def get_weather(self):
+        city = self.city_entry.get()
+        api_key = "26e7e40cca2767ad69a9b5bb1f9ec509"
+        url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
+        try:
+            with urllib.request.urlopen(url) as response:
+                data = json.load(response)
+                if data["cod"] == 200:
+                    weather_desc = data["weather"][0]["description"]
+                    temp = data["main"]["temp"]
+                    humidity = data["main"]["humidity"]
+                    wind_speed = data["wind"]["speed"]
+                    pressure = data["main"]["pressure"]
+                    self.weather_label.config(text=f"Weather: {weather_desc}\nTemperature: {temp}°C\nHumidity: {humidity}%\nWind Speed: {wind_speed} m/s\nPressure: {pressure} hPa\n")
+
+                    # Update temperature scale
+                    self.update_temperature_scale(temp)
+
+                    # Check for heavy rain or high temperature
+                    if "rain" in weather_desc.lower() and data["weather"][0]["main"] == "Rain":
+                        messagebox.showwarning("Alert", "Heavy rain expected!")
+                    elif temp > 30:
+                        messagebox.showwarning("Alert", "High temperature warning!")
+                    
+                else:
+                    self.weather_label.config(text="City not found!")
+
+                # Save search to history
+                self.save_history(city, temp)
+        except Exception as e:
+            self.weather_label.config(text=f"An error occurred: {e}")
+
+    def update_temperature_scale(self, temp):
+        # Clear previous temperature scale
+        self.temperature_canvas.delete("all")
+
+        # Draw new temperature scale
+        scale_height = 300
+        scale_width = 50
+        min_temp = 0
+        max_temp = 40
+        temperature_range = max_temp - min_temp
+        pixels_per_degree = scale_height / temperature_range
+
+        # Draw temperature scale
+        for t in range(min_temp, max_temp + 1):
+            y = scale_height - (t - min_temp) * pixels_per_degree
+            self.temperature_canvas.create_text(scale_width // 2, y, text=f"{t}°C")
+
+        # Highlight current temperature
+        y_temp = scale_height - (temp - min_temp) * pixels_per_degree
+        self.temperature_canvas.create_line(scale_width, y_temp, scale_width * 2, y_temp, fill="red", width=2)
+
+        # Show current temperature marker
+        self.temperature_canvas.create_oval(scale_width - 5, y_temp - 5, scale_width + 5, y_temp + 5, fill="green")
+
+    def save_history(self, city, temperature):
+        # Insert search record into the database
+        self.cursor.execute("INSERT INTO searches (city, temperature) VALUES (?, ?)", (city, temperature))
+        self.conn.commit()
+
+    def show_history(self):
+        def delete_history():
+            # Delete all history entries from the database
+            self.cursor.execute("DELETE FROM searches")
+            self.conn.commit()
+            # Refresh the history window
+            show_history()
+
+        def show_history():
+            nonlocal history_frame, delete_button_created
+            # Clear previous history frame
+            if history_frame is not None:
+                history_frame.destroy()
+            # Create a new frame for displaying history
+            history_frame = tk.Frame(history_window, bg='light blue')
+            history_frame.pack(pady=10)
+
+            # Display search history from the database
+            self.cursor.execute("SELECT * FROM searches")
+            search_history = self.cursor.fetchall()
+
+            for search in search_history:
+                city, temperature = search[1], search[2]
+                history_entry = tk.Label(history_frame, text=f"City: {city}, Temperature: {temperature}°C", bg='light blue')
+                history_entry.pack(padx=20, pady=5, side=tk.TOP)
+
+            # Create delete button if not already created
+            if not delete_button_created:
+                delete_button = tk.Button(history_window, text="Delete All History", command=delete_history)
+                delete_button.pack(pady=10)
+                delete_button_created = True
+
+        # Create a new window for displaying history
+        history_window = tk.Toplevel(self.root)
+        history_window.title("Search History")
+        history_window.geometry("300x200")
+        history_window.configure(background='light blue')
+
+        history_frame = None
+        delete_button_created = False
+        show_history()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = WeatherApp(root)
+    root.mainloop()
